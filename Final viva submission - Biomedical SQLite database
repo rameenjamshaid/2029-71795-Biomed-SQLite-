@@ -1,0 +1,158 @@
+import sqlite3
+
+DB_NAME = "biomed_study.db"
+
+conn = sqlite3.connect(DB_NAME)
+cursor = conn.cursor()
+
+cursor.executescript("""
+DROP TABLE IF EXISTS Samples;
+DROP TABLE IF EXISTS Clinical_Visits;
+DROP TABLE IF EXISTS Patients;
+
+CREATE TABLE Patients (
+    patient_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    full_name       TEXT NOT NULL,
+    age             INTEGER CHECK(age >= 18 AND age <= 90),
+    gender          TEXT CHECK(gender IN ('Male', 'Female', 'Other')),
+    enrollment_date TEXT NOT NULL
+);
+
+CREATE TABLE Clinical_Visits (
+    visit_id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    patient_id              INTEGER NOT NULL,
+    visit_date              TEXT NOT NULL,
+    systolic_bp             INTEGER,
+    diastolic_bp            INTEGER,
+    blood_glucose_mmol_L    REAL,
+    notes                   TEXT,
+    FOREIGN KEY (patient_id) REFERENCES Patients(patient_id) ON DELETE CASCADE
+);
+
+CREATE TABLE Samples (
+    sample_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    patient_id       INTEGER NOT NULL,
+    collection_date  TEXT NOT NULL,
+    sample_type      TEXT CHECK(sample_type IN ('Blood', 'Serum', 'Plasma', 'Urine')),
+    storage_location TEXT,
+    FOREIGN KEY (patient_id) REFERENCES Patients(patient_id) ON DELETE CASCADE
+);
+""")
+conn.commit()
+
+print("Tables created successfully.\n")
+
+def print_results(title, cursor):
+    print(f"\n{title}")
+    print("-" * 70)
+    rows = cursor.fetchall()
+    if not rows:
+        print("No records found.")
+        return
+    headers = [desc[0] for desc in cursor.description]
+    print(" | ".join(f"{h:<18}" for h in headers))
+    print("-" * 70)
+    for row in rows:
+        print(" | ".join(f"{str(v):<18}" for v in row))
+    print()
+
+
+patients = [
+    ("Ahmed Khan",     54, "Male",   "2025-03-12"),
+    ("Sana Malik",     38, "Female", "2025-04-01"),
+    ("Zara Hussain",   62, "Female", "2025-05-20"),
+    ("Bilal Ahmed",    45, "Male",   "2025-06-15"),   # extra to make demo more interesting
+]
+
+cursor.executemany("""
+    INSERT INTO Patients (full_name, age, gender, enrollment_date)
+    VALUES (?, ?, ?, ?)
+""", patients)
+conn.commit()
+
+cursor.execute("SELECT patient_id FROM Patients ORDER BY patient_id")
+patient_ids = [row[0] for row in cursor.fetchall()]
+p1, p2, p3, p4 = patient_ids
+
+visits = [
+    (p1, "2025-04-10", 148,  92,  8.7,  "Feeling tired"),
+    (p1, "2025-05-15", 135,  85,  7.2,  None),
+    (p2, "2025-05-05", 142,  88,  9.1,  "Headache reported"),
+    (p3, "2025-06-01", 128,  78,  6.4,  "Stable"),
+    (p4, "2025-07-02", 155,  95, 10.3,  "Elevated BP after travel"),
+]
+
+cursor.executemany("""
+    INSERT INTO Clinical_Visits
+    (patient_id, visit_date, systolic_bp, diastolic_bp, blood_glucose_mmol_L, notes)
+    VALUES (?, ?, ?, ?, ?, ?)
+""", visits)
+conn.commit()
+
+# At least 5 samples
+samples = [
+    (p1, "2025-04-10", "Blood",  "Fridge A-03"),
+    (p1, "2025-05-15", "Serum",  "Biobank Rack 5"),
+    (p2, "2025-05-05", "Plasma", "Fridge B-12"),
+    (p3, "2025-06-01", "Urine",  "Fridge C-07"),
+    (p1, "2025-06-10", "Blood",  "Fridge A-04"),
+]
+
+cursor.executemany("""
+    INSERT INTO Samples (patient_id, collection_date, sample_type, storage_location)
+    VALUES (?, ?, ?, ?)
+""", samples)
+conn.commit()
+
+cursor.execute("""
+    SELECT full_name, age, enrollment_date
+    FROM Patients
+    ORDER BY patient_id
+""")
+print_results("All Patients (age & enrollment date)", cursor)
+
+cursor.execute("""
+    SELECT p.full_name, v.visit_date, v.systolic_bp, v.diastolic_bp,
+           v.blood_glucose_mmol_L, v.notes
+    FROM Patients p
+    JOIN Clinical_Visits v ON p.patient_id = v.patient_id
+    WHERE p.patient_id = ?
+    ORDER BY v.visit_date
+""", (p1,))
+print_results(f"Clinical Visits for patient {p1} ({patients[0][0]})", cursor)
+
+# 3. Patients with systolic BP > 140 in any visit
+cursor.execute("""
+    SELECT DISTINCT p.full_name, v.systolic_bp
+    FROM Patients p
+    JOIN Clinical_Visits v ON p.patient_id = v.patient_id
+    WHERE v.systolic_bp > 140
+""")
+print_results("Patients with systolic BP > 140 in any visit", cursor)
+
+
+# ─── UPDATE ───
+
+cursor.execute("""
+    UPDATE Samples
+    SET storage_location = 'Biobank Freezer 2 – Secured'
+    WHERE sample_id = 1
+""")
+conn.commit()
+print("→ Storage location of sample ID 1 updated.\n")
+
+
+
+print("Before DELETE – samples for patient", p4, ":")
+cursor.execute("SELECT * FROM Samples WHERE patient_id = ?", (p4,))
+print(cursor.fetchall() or "None")
+
+cursor.execute("DELETE FROM Patients WHERE patient_id = ?", (p4,))
+conn.commit()
+
+print("\nAfter DELETE patient", p4, "– samples left for him:")
+cursor.execute("SELECT * FROM Samples WHERE patient_id = ?", (p4,))
+print(cursor.fetchall() or "None (deleted by CASCADE)")
+
+print("\nAll operations completed successfully.")
+conn.close()
